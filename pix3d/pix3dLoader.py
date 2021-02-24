@@ -7,6 +7,7 @@ import json
 from detectron2.structures import BoxMode
 import itertools
 import random
+import os
 
 def load_as_float(path):
     return cv2.imread(path).astype(np.float32)
@@ -45,6 +46,10 @@ def Detectron2_FasterRCNN_Pix3D(root, ttype):
             record["image_id"] = category
             record["height"] = img_size[1]
             record["width"] = img_size[0]
+            # test matrix
+            record["rot_mat"] = rot_mat
+            record["trans_mat"] = trans_mat
+            #
             #print('image_height: ', img_size[1], 'image_width:', img_size[0])
             #print('category, idx:', category, classes.index(category))
             obj = {
@@ -111,3 +116,15 @@ class Pix3DLoader(data.Dataset):
 
     def __len__(self):
         return len(self.data_p3d)
+
+root = os.path.join(os.path.dirname(os.path.abspath(__file__)))
+
+data_dict = Detectron2_FasterRCNN_Pix3D(root, ttype='train.txt')
+
+rot_mat = np.array(data_dict[0]["rot_mat"])
+trans_mat = np.array(data_dict[0]["trans_mat"])
+
+_RT = np.dot(-rot_mat, trans_mat)
+proj_mat = np.hstack([rot_mat, _RT[:,None]])
+proj_mat = np.vstack([proj_mat, np.array([0,0,0,1])])
+print(proj_mat)

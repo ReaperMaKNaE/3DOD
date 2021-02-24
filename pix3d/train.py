@@ -30,11 +30,11 @@ parser.add_argument('--score_2D', default = 0.7, type=float,
                     help='the threshold score for 2D object detection')
 
 args = parser.parse_args()
-Pix3DDataset = Pix3DLoader(
+#Pix3DDataset = Pix3DLoader(
 
-)
+#)
 
-t
+#t
 
 def output_detectron2():
     Object_detector_2D = detectron2_FasterRCNN.detectron2_Faster_RCNN
@@ -64,4 +64,5 @@ def output_detectron2():
         else:
             print('nothing detected at image {}'.format(idx))
 
-def train():
+
+output_detectron2()

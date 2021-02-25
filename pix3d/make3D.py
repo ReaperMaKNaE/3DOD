@@ -23,7 +23,10 @@ def main():
     voxel_size = 0.4
     root = os.path.join(os.path.dirname(os.path.abspath(__file__)))
 
+    scale_factor = [0.5, 0.6]
+    room_scale = 0.7
     room_size = [256, 256, 256]
+    room_scale = (int(room_size[0]*room_scale), int(room_size[1]*room_scale), int(room_size[2]*room_scale))
     wall_thickness = 5
 
     with open("{}/pix3d.json".format(root)) as json_file:
@@ -32,6 +35,7 @@ def main():
     img = json_data[idx_p3d]["img"]
     print('img root: {}/{}'.format(root,img))
     img = cv2.imread('{}/{}'.format(root,img), cv2.IMREAD_COLOR)
+    img = cv2.resize(img, (640,640))
     cv2.imshow('images', img)
     cv2.waitKey(0)
     print('model: ', json_data[idx_p3d]["model"])
@@ -40,10 +44,10 @@ def main():
     # make room
     room = np.ones([room_size[0],room_size[1],room_size[2]])
     # make floor
-    #room[:,:,:wall_thickness] = np.zeros([room_size[0],room_size[1],wall_thickness])
+    room[:,:wall_thickness,:] = np.zeros([room_size[0],wall_thickness,room_size[2]])
     # make wall
-    #room[:wall_thickness,:,:] = np.zeros([wall_thickness,room_size[1],room_size[2]])
-    #room[:,:wall_thickness,:] = np.zeros([room_size[0],wall_thickness,room_size[2]])
+    room[room_size[0]-wall_thickness:room_size[0],:,:] = np.zeros([wall_thickness,room_size[1],room_size[2]])
+    room[:,:,room_size[2]-wall_thickness:room_size[2]] = np.zeros([room_size[0],room_size[1],wall_thickness])
     room.astype(float)
 
     # make objects
@@ -55,7 +59,11 @@ def main():
     #object2 = '{}/model/chair/IKEA_BERNHARD/tsdf.npz'.format(root)
     #object2 = call_tsdf(object2)
 
-    scale_factor = [0.3, 0.6]
+    room_offset = [(room_size[0]-room.shape[0])/2, (room_size[1]-room.shape[1])/2, (room_size[2]-room.shape[2])/2]
+    room_offset_x = int(room_offset[0])
+    room_offset_y = int(room_offset[1])
+    room_offset_z = int(room_offset[2])
+
     object_scale = [[int(room_size[0]*scale_factor[0]), int(room_size[1]*scale_factor[0]), int(room_size[2]*scale_factor[0])],
                      [int(room_size[0]*scale_factor[1]), int(room_size[1]*scale_factor[1]), int(room_size[2]*scale_factor[1])]]
     center_offset = [[(room_size[0]-object_scale[0][0])/2, (room_size[1]-object_scale[0][1])/2, (room_size[2]-object_scale[0][2])/2],
@@ -63,6 +71,14 @@ def main():
     center_offset_x = [int(center_offset[0][0]), int(center_offset[1][0])]
     center_offset_y = [int(center_offset[0][1]), int(center_offset[1][1])]
     center_offset_z = [int(center_offset[0][2]), int(center_offset[1][2])]
+
+    room_torch = torch.from_numpy(room)
+    for i in range(2):
+        room_torch = room_torch.unsqueeze(0)
+    room_torch = F.interpolate(room_torch, room_scale, mode='trilinear')
+    for i in range(2):
+        room_torch = room_torch.squeeze(0)
+    room = room_torch.numpy()
 
     # rescale object using torch.nn.functional.interpolate
     object1_torch = torch.from_numpy(object1)
@@ -89,6 +105,11 @@ def main():
                                (center_offset_z[0], room_size[2]-center_offset_z[0]-object1.shape[2])),
                      mode = 'constant', constant_values=1)
                      
+    room = np.pad(room, ((room_offset_x, room_size[0]-room_offset_x-room.shape[0]),
+                         (room_offset_y, room_size[1]-room_offset_y-room.shape[1]),
+                         (room_offset_z, room_size[2]-room_offset_z-room.shape[2])),
+                  mode='constant', constant_values=1)
+
     #object2 = np.pad(object2, ((center_offset_x[1], room_size[0]-center_offset_x[1]-object2.shape[0]),
     #                           (center_offset_y[1], room_size[1]-center_offset_y[1]-object2.shape[1]),
     #                           (center_offset_z[1], room_size[2]-center_offset_z[1]-object2.shape[2])),
@@ -104,7 +125,8 @@ def main():
     rotation_matrices=[]
     rotation_matrices.append(rot_mat)
 
-    object1 = rotate_object(object1, rotation_mat=rotation_matrices[0], angle=[-20,180,-12], offset=[0.3, 0.0, 0.0])
+    object1 = rotate_object(object1, rotation_mat=rotation_matrices[0], angle=[-15,185,-16], offset=[0.0, 0.0, 0.0])
+    room = rotate_object(room, rotation_mat = rotation_matrices[0], angle=[-15, 185, -16], offset=[0.0, -0.5, 0.0])
     #object2 = rotate_object(object2, angle=[0,0,0], offset=[0.0, 0.0, 0.0])
 
     objects.append(object1)
@@ -200,7 +222,7 @@ def get_mesh(tsdf, voxel_size):
     return verts, faces, norms, colors
 
 def rotate_object(object_item, rotation_mat=None, angle=[0,0,0], offset=[0,0,0]):
-    object1_torch = torch.from_numpy(object_item)
+    object1_torch = torch.from_numpy(object_item).float()
     for i in range(2):
         object1_torch = object1_torch.unsqueeze(0)
 
@@ -241,6 +263,7 @@ def localization(input_tensor, rotation_matrix, offset=[0,0,0]):
     normalised_locs_y = (2.0*rot_locs[1]+offset[1]*(h-1))/(h-1)# - (h-1))/(h-1)
     normalised_locs_z = (2.0*rot_locs[2]+offset[2]*(d-1))/(d-1)# - (d-1))/(d-1)
     grid = torch.stack([normalised_locs_x, normalised_locs_y, normalised_locs_z], dim=4).view(1, d, h, w, 3)
+    print('the type of each arguments: ', input_tensor.dtype, grid.dtype)
     rotated_signal = F.grid_sample(input=input_tensor, grid=grid, padding_mode="border", mode='nearest', align_corners=True)
     return rotated_signal.squeeze(0).squeeze(0)
 

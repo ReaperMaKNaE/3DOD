@@ -20,7 +20,11 @@ def main():
     room[:,:5,:] = np.zeros([128,5,128])
     room.astype(float)
 
-    offset = 15
+    offset = [31, 31, 31]
+
+    offset_x = offset[0]
+    offset_y = offset[1]
+    offset_z = offset[2]
     # make objects
     objects = []
     object1 = '{}/model/bed/IKEA_BEDDINGE/tsdf.npz'.format(root)
@@ -41,11 +45,11 @@ def main():
     # this part is padding 1(which means air)
     # but this is not a best option. we should change this part to torch.nn.functional.pad
     # actually, this process is similar to grid_sample
-    object1 = np.pad(object1, ((offset, 128-offset-object1.shape[0]),
-                               (offset, 128-offset-object1.shape[1]),
-                               (offset, 128-offset-object1.shape[2])),
+    object1 = np.pad(object1, ((offset_x, 128-offset_x-object1.shape[0]),
+                               (offset_y, 128-offset_y-object1.shape[1]),
+                               (offset_z, 128-offset_z-object1.shape[2])),
                      mode = 'constant', constant_values=1)
-    object1 = rotate_object(object1, angle= 10)
+    object1 = rotate_object(object1, angle=[0,0,0])
     #object1 = rotate_object(object1, rot_tran_mat)
     objects.append(object1)
 
@@ -95,14 +99,14 @@ def get_mesh(tsdf, voxel_size):
     verts = verts*voxel_size
     return verts
 
-def rotate_object(object_item, angle=0):
+def rotate_object(object_item, angle=[0,0,0]):
     object1_torch = torch.from_numpy(object_item)
     for i in range(2):
         object1_torch = object1_torch.unsqueeze(0)
 
-    roll  = angle * np.pi / 180.
-    yaw   = angle * np.pi / 180.
-    pitch = angle * np.pi / 180.
+    roll  = angle[0] * np.pi / 180.
+    yaw   = angle[1] * np.pi / 180.
+    pitch = angle[2] * np.pi / 180.
 
     rot_roll   = np.array([[math.cos(roll), -math.sin(roll), 0.],
                            [math.sin(roll), math.cos(roll),  0.],
@@ -123,6 +127,27 @@ def rotate_object(object_item, angle=0):
 
     return rotated_object
 
+def rotate(input_tensor, rotation_matrix):
+    device_ = input_tensor.device
+    _, _, d, h, w = input_tensor.shape
+    locations_3d = get_3d_locations(d, h, w, device_)
+    rotated_3d_positions = torch.bmm(rotation_matrix.view(1,3,3).expand(d*h*w, 3, 3), locations_3d).view(1, d, h, w, 3)
+    rot_locs = torch.split(rotated_3d_positions, split_size_or_sections=1, dim=4)
+    normalised_locs_x = (2.0*rot_locs[0] - (w-1))/(w-1)
+    normalised_locs_y = (2.0*rot_locs[1] - (h-1))/(h-1)
+    normalised_locs_z = (2.0*rot_locs[2] - (d-1))/(d-1)
+    grid = torch.stack([normalised_locs_x, normalised_locs_y, normalised_locs_z], dim=4).view(1, d, h, w, 3)
+    rotated_signal = F.grid_sample(input=input_tensor, grid=grid, padding_mode="border", mode='nearest', align_corners=True)
+    return rotated_signal.squeeze(0).squeeze(0)
+
+def get_3d_locations(d, h, w, device_):
+    locations_x = torch.linspace(0, w-1, w).view(1, 1, 1, w).to(device_).expand(1, d, h, w)
+    locations_y = torch.linspace(0, h-1, h).view(1, 1, h, 1).to(device_).expand(1, d, h, w)
+    locations_z = torch.linspace(0, d-1, d).view(1, d, 1, 1).to(device_).expand(1, d, h, w)
+    locations_3d = torch.stack([locations_x, locations_y, locations_z], dim=4).view(-1, 3, 1)
+    return locations_3d
+
+### USELESS PART
 def rotation_check():
     root = os.path.join(os.path.dirname(os.path.abspath(__file__)))
     object1 = '{}/model/bed/IKEA_BEDDINGE/tsdf.npz'.format(root)
@@ -180,27 +205,6 @@ def rotation_check():
     #print('the number of transformed_vectors: ', len(transformed_vectors))
 
     #rotated_object1 = trilinear_interpolation(transformed_vectors, object1)
-
-def rotate(input_tensor, rotation_matrix):
-    device_ = input_tensor.device
-    _, _, d, h, w = input_tensor.shape
-    locations_3d = get_3d_locations(d, h, w, device_)
-    rotated_3d_positions = torch.bmm(rotation_matrix.view(1,3,3).expand(d*h*w, 3, 3), locations_3d).view(1, d, h, w, 3)
-    rot_locs = torch.split(rotated_3d_positions, split_size_or_sections=1, dim=4)
-    normalised_locs_x = (2.0*rot_locs[0] - (w-1))/(w-1)
-    normalised_locs_y = (2.0*rot_locs[1] - (h-1))/(h-1)
-    normalised_locs_z = (2.0*rot_locs[2] - (d-1))/(d-1)
-    grid = torch.stack([normalised_locs_x, normalised_locs_y, normalised_locs_z], dim=4).view(1, d, h, w, 3)
-    rotated_signal = F.grid_sample(input=input_tensor, grid=grid, mode='nearest', align_corners=True)
-    return rotated_signal.squeeze(0).squeeze(0)
-
-def get_3d_locations(d, h, w, device_):
-    locations_x = torch.linspace(0, w-1, w).view(1, 1, 1, w).to(device_).expand(1, d, h, w)
-    locations_y = torch.linspace(0, h-1, h).view(1, 1, h, 1).to(device_).expand(1, d, h, w)
-    locations_z = torch.linspace(0, d-1, d).view(1, d, 1, 1).to(device_).expand(1, d, h, w)
-    locations_3d = torch.stack([locations_x, locations_y, locations_z], dim=4).view(-1, 3, 1)
-    return locations_3d
-    
 
 def trilinear_interpolation(vectors, coord):
     """ actually, not trilinear interpolation now.

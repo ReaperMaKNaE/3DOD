@@ -32,6 +32,10 @@ def main():
 
     scale_factor = 0.5
     object1_scale = (int(128*scale_factor),int(128*scale_factor),int(128*scale_factor))
+    center_offset = [(128-object1_scale[0])/2, (128-object1_scale[1])/2, (128-object1_scale[2])/2]
+    center_offset_x = int(center_offset[0])
+    center_offset_y = int(center_offset[1])
+    center_offset_z = int(center_offset[2])
 
     # rescale object using torch.nn.functional.interpolate
     object1_torch = torch.from_numpy(object1)
@@ -45,12 +49,17 @@ def main():
     # this part is padding 1(which means air)
     # but this is not a best option. we should change this part to torch.nn.functional.pad
     # actually, this process is similar to grid_sample
-    object1 = np.pad(object1, ((offset_x, 128-offset_x-object1.shape[0]),
-                               (offset_y, 128-offset_y-object1.shape[1]),
-                               (offset_z, 128-offset_z-object1.shape[2])),
+    object1 = np.pad(object1, ((center_offset_x, 128-center_offset_x-object1.shape[0]),
+                               (center_offset_y, 128-center_offset_y-object1.shape[1]),
+                               (center_offset_z, 128-center_offset_z-object1.shape[2])),
                      mode = 'constant', constant_values=1)
-    object1 = rotate_object(object1, angle=[0,0,0])
-    #object1 = rotate_object(object1, rot_tran_mat)
+                     
+    # rotate and localization module.
+    # if you want watch your object in this section, plz refer below conditions
+    # angle \in [0, 2\pi]
+    # offset \in [-1, 1]
+    object1 = rotate_object(object1, angle=[30,50,0], offset=[0.0,0.0,0.3])
+
     objects.append(object1)
 
     # resize and localization for objects
@@ -99,7 +108,7 @@ def get_mesh(tsdf, voxel_size):
     verts = verts*voxel_size
     return verts
 
-def rotate_object(object_item, angle=[0,0,0]):
+def rotate_object(object_item, angle=[0,0,0], offset=[0,0,0]):
     object1_torch = torch.from_numpy(object_item)
     for i in range(2):
         object1_torch = object1_torch.unsqueeze(0)
@@ -122,28 +131,29 @@ def rotate_object(object_item, angle=[0,0,0]):
 
     rot_mat_torch = torch.from_numpy(rot_mat).float()
 
-    rotated_object = rotate(object1_torch, rot_mat_torch)
+    rotated_object = localization(object1_torch, rot_mat_torch, offset)
     rotated_object = rotated_object.numpy()
 
     return rotated_object
 
-def rotate(input_tensor, rotation_matrix):
+def localization(input_tensor, rotation_matrix, offset=[0,0,0]):
     device_ = input_tensor.device
     _, _, d, h, w = input_tensor.shape
     locations_3d = get_3d_locations(d, h, w, device_)
     rotated_3d_positions = torch.bmm(rotation_matrix.view(1,3,3).expand(d*h*w, 3, 3), locations_3d).view(1, d, h, w, 3)
     rot_locs = torch.split(rotated_3d_positions, split_size_or_sections=1, dim=4)
-    normalised_locs_x = (2.0*rot_locs[0] - (w-1))/(w-1)
-    normalised_locs_y = (2.0*rot_locs[1] - (h-1))/(h-1)
-    normalised_locs_z = (2.0*rot_locs[2] - (d-1))/(d-1)
+    # print('rot_locs shapes: ', rot_locs[0].shape, rot_locs[1].shape, rot_locs[2].shape)
+    normalised_locs_x = (2.0*rot_locs[0]+offset[0]*(w-1))/(w-1)#- (w-1))/(w-1)
+    normalised_locs_y = (2.0*rot_locs[1]+offset[1]*(h-1))/(h-1)# - (h-1))/(h-1)
+    normalised_locs_z = (2.0*rot_locs[2]+offset[2]*(d-1))/(d-1)# - (d-1))/(d-1)
     grid = torch.stack([normalised_locs_x, normalised_locs_y, normalised_locs_z], dim=4).view(1, d, h, w, 3)
     rotated_signal = F.grid_sample(input=input_tensor, grid=grid, padding_mode="border", mode='nearest', align_corners=True)
     return rotated_signal.squeeze(0).squeeze(0)
 
 def get_3d_locations(d, h, w, device_):
-    locations_x = torch.linspace(0, w-1, w).view(1, 1, 1, w).to(device_).expand(1, d, h, w)
-    locations_y = torch.linspace(0, h-1, h).view(1, 1, h, 1).to(device_).expand(1, d, h, w)
-    locations_z = torch.linspace(0, d-1, d).view(1, d, 1, 1).to(device_).expand(1, d, h, w)
+    locations_x = torch.linspace(-w/2, w/2, w).view(1, 1, 1, w).to(device_).expand(1, d, h, w)
+    locations_y = torch.linspace(-h/2, h/2, h).view(1, 1, h, 1).to(device_).expand(1, d, h, w)
+    locations_z = torch.linspace(-d/2, d/2, d).view(1, d, 1, 1).to(device_).expand(1, d, h, w)
     locations_3d = torch.stack([locations_x, locations_y, locations_z], dim=4).view(-1, 3, 1)
     return locations_3d
 

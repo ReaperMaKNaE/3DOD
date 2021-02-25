@@ -16,6 +16,9 @@ def main():
     parser.add_argument('--index', default=0, type=int,
                         help='the index of pix3d')
 
+    parser.add_argument('--set_angles', default=0, type=float,
+                        help='set the angles')
+
     args = parser.parse_args()
     idx_p3d = int(args.index)
     print('idx_p3d:' , idx_p3d)
@@ -26,6 +29,8 @@ def main():
     scale_factor = [0.5, 0.6]
     room_scale = 0.7
     room_size = [256, 256, 256]
+    #angles = [-20,185,-12]
+    angles = [0,0,0]
     room_scale = (int(room_size[0]*room_scale), int(room_size[1]*room_scale), int(room_size[2]*room_scale))
     wall_thickness = 5
 
@@ -36,19 +41,62 @@ def main():
     print('img root: {}/{}'.format(root,img))
     img = cv2.imread('{}/{}'.format(root,img), cv2.IMREAD_COLOR)
     img = cv2.resize(img, (640,640))
-    cv2.imshow('images', img)
-    cv2.waitKey(0)
+    #cv2.imshow('images', img)
+    #cv2.waitKey(0)
     print('model: ', json_data[idx_p3d]["model"])
     model = json_data[idx_p3d]["model"].split('/')
+    #basic_camera_location = json_data[0]["cam_position"]
+    #basic_trans_mat = json_data[0]["trans_mat"]
+    #basic_trans_mat[2] -= 1
     rot_mat = json_data[idx_p3d]["rot_mat"]
+    trans_mat = json_data[idx_p3d]["trans_mat"]
+
+    #trans_mat = -np.dot(np.linalg.inv(np.array(rot_mat)),np.array(trans_mat))
+
+    print('trans_mat: ', trans_mat)
+
+    angles[0] += np.arctan(trans_mat[1]/trans_mat[0])*args.set_angles*180/np.pi
+    angles[1] += np.arctan(trans_mat[2]/trans_mat[1])*args.set_angles*180/np.pi
+    angles[2] += np.arctan(trans_mat[0]/trans_mat[2])*args.set_angles*180/np.pi
+
+    print('angles: ', angles)
+    """     cam_position = json_data[idx_p3d]["cam_position"]
+
+    print('cam_position: ', cam_position)
+
+    calculated_pose = np.dot(np.array(rot_mat), np.array(trans_mat))
+    print('calculated_pose: ', calculated_pose) """
+
+    # FUCKFUCKFUCKFUCKFUCK
+    """    camera_location = json_data[idx_p3d]["cam_position"]
+    trans_mat = json_data[idx_p3d]["trans_mat"]
+    trans_mat[2] -= 1
+
+    basic_campose_trans = np.subtract(np.array(basic_camera_location), np.array(basic_trans_mat))
+    campose_trans = np.subtract(np.array(camera_location), np.array(trans_mat))
+
+    basic_campose_trans = basic_campose_trans.reshape((-1,1))
+    basic_campose_trans = np.hstack([np.array([[0],[1],[0]]), basic_campose_trans])
+    basic_campose_trans = np.hstack([np.array([[1],[0],[0]]), basic_campose_trans])
+
+    campose_trans = campose_trans.reshape((-1,1))
+    campose_trans = np.hstack([np.array([[rot_mat[0][1]],[rot_mat[1][1]],[rot_mat[2][1]]]), campose_trans])
+    campose_trans = np.hstack([np.array([[rot_mat[0][0]],[rot_mat[1][0]],[rot_mat[2][0]]]), campose_trans])
+
+    basic_campose_trans_inv = np.linalg.inv(basic_campose_trans)
+    rotation_mat_campose_trans = np.dot(campose_trans, basic_campose_trans_inv)
+    print('rot_mat: ', rot_mat)
+    print('campose_trans: ', campose_trans)
+    print('rotation_mat_campose_trans: ', rotation_mat_campose_trans) """
+
     # make room
     room = np.ones([room_size[0],room_size[1],room_size[2]])
     # make floor
-    room[:,:wall_thickness,:] = np.zeros([room_size[0],wall_thickness,room_size[2]])
+    #room[:,:wall_thickness,:] = np.zeros([room_size[0],wall_thickness,room_size[2]])
     # make wall
-    room[room_size[0]-wall_thickness:room_size[0],:,:] = np.zeros([wall_thickness,room_size[1],room_size[2]])
-    room[:,:,room_size[2]-wall_thickness:room_size[2]] = np.zeros([room_size[0],room_size[1],wall_thickness])
-    room.astype(float)
+    #room[room_size[0]-wall_thickness:room_size[0],:,:] = np.zeros([wall_thickness,room_size[1],room_size[2]])
+    #room[:,:,room_size[2]-wall_thickness:room_size[2]] = np.zeros([room_size[0],room_size[1],wall_thickness])
+    #room.astype(float)
 
     # make objects
     objects = []
@@ -125,8 +173,8 @@ def main():
     rotation_matrices=[]
     rotation_matrices.append(rot_mat)
 
-    object1 = rotate_object(object1, rotation_mat=rotation_matrices[0], angle=[-15,185,-16], offset=[0.0, 0.0, 0.0])
-    room = rotate_object(room, rotation_mat = rotation_matrices[0], angle=[-15, 185, -16], offset=[0.0, -0.5, 0.0])
+    object1 = rotate_object(object1, rotation_mat=rotation_matrices[0], angle=angles, offset=[0.0, 0.0, 0.0])
+    room = rotate_object(room, rotation_mat = rotation_matrices[0], angle=angles, offset=[-0.3, -0.5, -0.3])
     #object2 = rotate_object(object2, angle=[0,0,0], offset=[0.0, 0.0, 0.0])
 
     objects.append(object1)
@@ -221,7 +269,7 @@ def get_mesh(tsdf, voxel_size):
     verts = verts*voxel_size
     return verts, faces, norms, colors
 
-def rotate_object(object_item, rotation_mat=None, angle=[0,0,0], offset=[0,0,0]):
+def rotate_object(object_item, rotation_mat=None, rotation_campose_trans=None, angle=[0,0,0], offset=[0,0,0]):
     object1_torch = torch.from_numpy(object_item).float()
     for i in range(2):
         object1_torch = object1_torch.unsqueeze(0)
@@ -244,6 +292,9 @@ def rotate_object(object_item, rotation_mat=None, angle=[0,0,0], offset=[0,0,0])
 
     if rotation_mat:
         rot_mat = np.dot(rotation_mat, rot_mat)
+
+    if rotation_campose_trans:
+        rot_mat = np.dot(rot_mat, rotation_campose_trans)
 
     rot_mat_torch = torch.from_numpy(rot_mat).float()
 

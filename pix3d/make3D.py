@@ -27,7 +27,7 @@ def main():
     root = os.path.join(os.path.dirname(os.path.abspath(__file__)))
 
     scale_factor = [0.5, 0.6]
-    room_scale = 0.7
+    room_scale = 1
     room_size = [256, 256, 256]
     #angles = [-20,185,-12]
     angles = [0,0,0]
@@ -55,9 +55,9 @@ def main():
 
     print('trans_mat: ', trans_mat)
 
-    angles[0] += np.arctan(trans_mat[1]/trans_mat[0])*args.set_angles*180/np.pi
-    angles[1] += np.arctan(trans_mat[2]/trans_mat[1])*args.set_angles*180/np.pi
-    angles[2] += np.arctan(trans_mat[0]/trans_mat[2])*args.set_angles*180/np.pi
+    #angles[0] += np.arctan(trans_mat[1]/trans_mat[0])*args.set_angles*180/np.pi
+    #angles[1] += np.arctan(trans_mat[2]/trans_mat[1])*args.set_angles*180/np.pi
+    #angles[2] += np.arctan(trans_mat[0]/trans_mat[2])*args.set_angles*180/np.pi
 
     print('angles: ', angles)
     """     cam_position = json_data[idx_p3d]["cam_position"]
@@ -91,12 +91,14 @@ def main():
 
     # make room
     room = np.ones([room_size[0],room_size[1],room_size[2]])
-    # make floor
-    #room[:,:wall_thickness,:] = np.zeros([room_size[0],wall_thickness,room_size[2]])
+    # make floor, z-axis
+    room[:,:,:wall_thickness] = np.zeros([room_size[0],room_size[1],wall_thickness])
     # make wall
-    #room[room_size[0]-wall_thickness:room_size[0],:,:] = np.zeros([wall_thickness,room_size[1],room_size[2]])
-    #room[:,:,room_size[2]-wall_thickness:room_size[2]] = np.zeros([room_size[0],room_size[1],wall_thickness])
-    #room.astype(float)
+    # x-axis
+    room[:wall_thickness,:,:] = np.zeros([wall_thickness,room_size[1],room_size[2]])
+    # y-axis
+    room[:,:wall_thickness,:] = np.zeros([room_size[0],wall_thickness,room_size[2]])
+    room.astype(float)
 
     # make objects
     objects = []
@@ -169,12 +171,13 @@ def main():
     # offset \in [-1, 1]
 
     
+    # angles = [-12, 185, -20]
 
     rotation_matrices=[]
     rotation_matrices.append(rot_mat)
 
-    object1 = rotate_object(object1, rotation_mat=rotation_matrices[0], angle=angles, offset=[0.0, 0.0, 0.0])
-    room = rotate_object(room, rotation_mat = rotation_matrices[0], angle=angles, offset=[-0.3, -0.5, -0.3])
+    object1 = rotate_object(object1, basic_angle = [0,0,0], rotation_mat = rotation_matrices[0], angle=[0,0,0], offset=[0.0, 0.0, 0.0])
+    room = rotate_object(room, basic_angle = [0,0,0],angle=[0,0,0], offset=[0., 0., 0.])
     #object2 = rotate_object(object2, angle=[0,0,0], offset=[0.0, 0.0, 0.0])
 
     objects.append(object1)
@@ -269,26 +272,36 @@ def get_mesh(tsdf, voxel_size):
     verts = verts*voxel_size
     return verts, faces, norms, colors
 
-def rotate_object(object_item, rotation_mat=None, rotation_campose_trans=None, angle=[0,0,0], offset=[0,0,0]):
+def rotate_object(object_item, basic_angle = [0,0,0], rotation_mat=None, rotation_campose_trans=None, angle=[0,0,0], offset=[0,0,0]):
+    """ Rotation and translation module
+       Args:
+       object_item            : object which i want to rotate
+       basic_angle            : rotation angle for align         [x, y, z]
+       rotation_mat           : rotation matrix in pix3d.json
+       rotation_campose_trans : calculated rotation matrix from cam position and trans_mat in pix3d.json
+       angle                  : additional angle input           [x, y, z]
+       offset                 : additional translation input
+
+       output                 : rotated object(numpy)
+    """
     object1_torch = torch.from_numpy(object_item).float()
     for i in range(2):
         object1_torch = object1_torch.unsqueeze(0)
 
-    roll  = angle[0] * np.pi / 180.
-    yaw   = angle[1] * np.pi / 180.
-    pitch = angle[2] * np.pi / 180.
+    # Align viewpoint
+    # To align, 1. rotate -90 at y-axis
+    #           2. rotate -90 at x-axis
 
-    rot_roll   = np.array([[math.cos(roll), -math.sin(roll), 0.],
-                        [math.sin(roll), math.cos(roll),  0.],
-                        [0.,             0.,              1.]])
-    rot_yaw    = np.array([[math.cos(yaw),  0., math.sin(yaw)],
-                        [0.,             1.,            0.],
-                        [-math.sin(yaw), 0., math.cos(yaw)]])
-    rot_pitch  = np.array([[1.,              0.,               0.],
-                        [0., math.cos(pitch), -math.sin(pitch)],
-                        [0., math.sin(pitch),  math.cos(pitch)]])
+    align_y = get_rotation_matrix([0,-90,0])
+    align_x = get_rotation_matrix([-90,0,0])
+    align_mat = np.dot(align_x, align_y)
 
-    rot_mat = np.dot(rot_roll, np.dot(rot_yaw, rot_pitch))
+
+    basic_rot_mat = get_rotation_matrix(basic_angle)
+    additional_rot_mat = get_rotation_matrix(angle)
+
+    basic_rot_mat = np.dot(basic_rot_mat, align_mat)
+    rot_mat = np.dot(additional_rot_mat, basic_rot_mat)
 
     if rotation_mat:
         rot_mat = np.dot(rotation_mat, rot_mat)
@@ -304,26 +317,65 @@ def rotate_object(object_item, rotation_mat=None, rotation_campose_trans=None, a
     return rotated_object
 
 def localization(input_tensor, rotation_matrix, offset=[0,0,0]):
+    """ Localization module
+       input_tensor    : object which i want to rotate
+       rotation_matrix : rotation matrix which will apply to input object
+       offset          : same as translation matrix, but not -Rt, only t.
+
+       output          : rotated object(Tensor)
+    """
+    print('rotation matrix in localization mat : ', rotation_matrix)
     device_ = input_tensor.device
+    #_, _, w, h, d = input_tensor.shape
     _, _, d, h, w = input_tensor.shape
     locations_3d = get_3d_locations(d, h, w, device_)
     rotated_3d_positions = torch.bmm(rotation_matrix.view(1,3,3).expand(d*h*w, 3, 3), locations_3d).view(1, d, h, w, 3)
     rot_locs = torch.split(rotated_3d_positions, split_size_or_sections=1, dim=4)
     # print('rot_locs shapes: ', rot_locs[0].shape, rot_locs[1].shape, rot_locs[2].shape)
-    normalised_locs_x = (2.0*rot_locs[0]+offset[0]*(w-1))/(w-1)#- (w-1))/(w-1)
-    normalised_locs_y = (2.0*rot_locs[1]+offset[1]*(h-1))/(h-1)# - (h-1))/(h-1)
-    normalised_locs_z = (2.0*rot_locs[2]+offset[2]*(d-1))/(d-1)# - (d-1))/(d-1)
+    normalised_locs_x = (2.0*rot_locs[0]+offset[0]*(w-1))/(w-1)
+    normalised_locs_y = (2.0*rot_locs[1]+offset[1]*(h-1))/(h-1)
+    normalised_locs_z = (2.0*rot_locs[2]+offset[2]*(d-1))/(d-1)
     grid = torch.stack([normalised_locs_x, normalised_locs_y, normalised_locs_z], dim=4).view(1, d, h, w, 3)
     print('the type of each arguments: ', input_tensor.dtype, grid.dtype)
     rotated_signal = F.grid_sample(input=input_tensor, grid=grid, padding_mode="border", mode='nearest', align_corners=True)
     return rotated_signal.squeeze(0).squeeze(0)
 
 def get_3d_locations(d, h, w, device_):
+    """ Get Coordinate of object
+       d       : depth(which is z value) of object
+       h       : height(which is y value) of object
+       w       : width(which is x value) of object
+
+       output  : 3d Coordinate 
+    """
     locations_x = torch.linspace(-w/2, w/2, w).view(1, 1, 1, w).to(device_).expand(1, d, h, w)
     locations_y = torch.linspace(-h/2, h/2, h).view(1, 1, h, 1).to(device_).expand(1, d, h, w)
     locations_z = torch.linspace(-d/2, d/2, d).view(1, d, 1, 1).to(device_).expand(1, d, h, w)
     locations_3d = torch.stack([locations_x, locations_y, locations_z], dim=4).view(-1, 3, 1)
     return locations_3d
+
+def get_rotation_matrix(angle=[0,0,0]):
+    """ get rotation matrix
+       To align axis, change roll and pitch (z-axis rotation for first index, x-axis rotation for third index)
+    """
+    roll  = angle[0] * np.pi / 180. # roll  : z-axis rotation
+    yaw   = angle[1] * np.pi / 180. # yaw   : y-axis rotation
+    pitch = angle[2] * np.pi / 180. # pitch : x-axis rotation
+
+    # z-axis rotation
+    rot_roll   = np.array([[math.cos(roll), -math.sin(roll), 0.],
+                        [math.sin(roll), math.cos(roll),  0.],
+                        [0.,             0.,              1.]])
+    # y-axis rotation
+    rot_yaw    = np.array([[math.cos(yaw),  0., math.sin(yaw)],
+                        [0.,             1.,            0.],
+                        [-math.sin(yaw), 0., math.cos(yaw)]])
+    # x-axis rotation
+    rot_pitch  = np.array([[1.,              0.,               0.],
+                        [0., math.cos(pitch), -math.sin(pitch)],
+                        [0., math.sin(pitch),  math.cos(pitch)]])
+
+    return np.dot(rot_roll, np.dot(rot_yaw, rot_pitch))
 
 """ 
 ### USELESS PART

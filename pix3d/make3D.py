@@ -10,6 +10,8 @@ import trimesh
 import json
 import argparse
 import cv2
+from matplotlib import pyplot as plt
+import matplotlib.patches as patches
 
 def main():
     parser = argparse.ArgumentParser(description='OD3D_Reconstruction Process')
@@ -26,7 +28,7 @@ def main():
     voxel_size = 0.4
     root = os.path.join(os.path.dirname(os.path.abspath(__file__)))
 
-    scale_factor = [0.5, 0.6]
+    scale_factor = [0.5, 0.5]
     room_scale = 1
     room_size = [256, 256, 256]
     #angles = [-20,185,-12]
@@ -41,8 +43,8 @@ def main():
     print('img root: {}/{}'.format(root,img))
     img = cv2.imread('{}/{}'.format(root,img), cv2.IMREAD_COLOR)
     img = cv2.resize(img, (640,640))
-    #cv2.imshow('images', img)
-    #cv2.waitKey(0)
+    cv2.imshow('images', img)
+    cv2.waitKey(0)
     print('model: ', json_data[idx_p3d]["model"])
     model = json_data[idx_p3d]["model"].split('/')
     #basic_camera_location = json_data[0]["cam_position"]
@@ -50,6 +52,8 @@ def main():
     #basic_trans_mat[2] -= 1
     rot_mat = json_data[idx_p3d]["rot_mat"]
     trans_mat = json_data[idx_p3d]["trans_mat"]
+
+    RT = np.hstack([np.array(rot_mat),np.array(trans_mat).reshape((-1,1))])
 
     #trans_mat = -np.dot(np.linalg.inv(np.array(rot_mat)),np.array(trans_mat))
 
@@ -92,12 +96,12 @@ def main():
     # make room
     room = np.ones([room_size[0],room_size[1],room_size[2]])
     # make floor, z-axis
-    room[:,:,:wall_thickness] = np.zeros([room_size[0],room_size[1],wall_thickness])
+    #room[:,:,:wall_thickness] = np.zeros([room_size[0],room_size[1],wall_thickness])
     # make wall
     # x-axis
-    room[:wall_thickness,:,:] = np.zeros([wall_thickness,room_size[1],room_size[2]])
+    #room[:wall_thickness,:,:] = np.zeros([wall_thickness,room_size[1],room_size[2]])
     # y-axis
-    room[:,:wall_thickness,:] = np.zeros([room_size[0],wall_thickness,room_size[2]])
+    #room[:,:wall_thickness,:] = np.zeros([room_size[0],wall_thickness,room_size[2]])
     room.astype(float)
 
     # make objects
@@ -105,6 +109,10 @@ def main():
 
     object1_path = os.path.join(root, model[0], model[1], model[2], 'tsdf.npz')
     object1 = call_tsdf(object1_path)
+
+    #mesh = o3d.io.read_triangle_mesh('{}/{}/{}/{}/model.obj'.format(root, model[0], model[1], model[2]))
+    #vertex_of_obj = np.asarray(mesh.vertices)
+    #o3d.visualization.draw_geometries([mesh])
 
     #object2 = '{}/model/chair/IKEA_BERNHARD/tsdf.npz'.format(root)
     #object2 = call_tsdf(object2)
@@ -176,9 +184,11 @@ def main():
     rotation_matrices=[]
     rotation_matrices.append(rot_mat)
 
-    object1 = rotate_object(object1, basic_angle = [0,0,0], rotation_mat = rotation_matrices[0], angle=[0,0,0], offset=[0.0, 0.0, 0.0])
-    room = rotate_object(room, basic_angle = [0,0,0],angle=[0,0,0], offset=[0., 0., 0.])
-    #object2 = rotate_object(object2, angle=[0,0,0], offset=[0.0, 0.0, 0.0])
+    # Align viewpoint
+    # To align, 1. rotate -90 at y-axis
+    #           2. rotate -90 at x-axis
+    #room = rotate_object(room, basic_angle=[[0,-90,0],[-90,0,0]])
+    #object1 = rotate_object(object1, basic_angle=[[0,90,0],[0,0,0]])#, rotation_mat=rotation_matrices[0])
 
     objects.append(object1)
     #objects.append(object2)
@@ -196,7 +206,18 @@ def main():
     #check_ply('{}/pc.ply'.format(root))
     
     verts, faces, norms, _ = get_mesh(room, voxel_size)
-
+    """
+    K = np.array([[-570. ,0.    ,320.],
+                  [0.   ,570.  ,320.],
+                  [0.   ,0.    ,1.  ]]) """
+    
+    #RT = np.array([[1,0,0,0], [0,1,0,0], [0,0,1,1]])
+    #camera_image = project(vertex_of_obj, K, RT)
+    #camera_image = project(verts, K, RT)
+    # why side-by-side-mirror?
+    #plt.plot(camera_image[:,0], camera_image[:,1])
+    #plt.show()
+    
     pcwrite('{}/pc.ply'.format(root), verts)
     meshwrite('{}/mesh.ply'.format(root), verts, faces, norms)
     check_mesh_and_ply(root)
@@ -272,7 +293,7 @@ def get_mesh(tsdf, voxel_size):
     verts = verts*voxel_size
     return verts, faces, norms, colors
 
-def rotate_object(object_item, basic_angle = [0,0,0], rotation_mat=None, rotation_campose_trans=None, angle=[0,0,0], offset=[0,0,0]):
+def rotate_object(object_item, basic_angle = [[0,0,0]], rotation_mat=None, rotation_campose_trans=None, angle=[[0,0,0]], offset=[0,0,0]):
     """ Rotation and translation module
        Args:
        object_item            : object which i want to rotate
@@ -288,19 +309,19 @@ def rotate_object(object_item, basic_angle = [0,0,0], rotation_mat=None, rotatio
     for i in range(2):
         object1_torch = object1_torch.unsqueeze(0)
 
-    # Align viewpoint
-    # To align, 1. rotate -90 at y-axis
-    #           2. rotate -90 at x-axis
+    for idx, comp in enumerate(basic_angle):
+        basic_rot_mat0 = get_rotation_matrix(comp)
+        if idx == 0:
+            basic_rot_mat = basic_rot_mat0
+        else:
+            basic_rot_mat = np.dot(basic_rot_mat0, basic_rot_mat)
+    for idx, comp in enumerate(angle):
+        additional_rot_mat0 = get_rotation_matrix(comp)
+        if idx == 0:
+            additional_rot_mat = additional_rot_mat0
+        else:
+            additional_rot_mat = np.dot(additional_rot_mat0, additional_rot_mat)
 
-    align_y = get_rotation_matrix([0,-90,0])
-    align_x = get_rotation_matrix([-90,0,0])
-    align_mat = np.dot(align_x, align_y)
-
-
-    basic_rot_mat = get_rotation_matrix(basic_angle)
-    additional_rot_mat = get_rotation_matrix(angle)
-
-    basic_rot_mat = np.dot(basic_rot_mat, align_mat)
     rot_mat = np.dot(additional_rot_mat, basic_rot_mat)
 
     if rotation_mat:
@@ -376,6 +397,15 @@ def get_rotation_matrix(angle=[0,0,0]):
                         [0., math.sin(pitch),  math.cos(pitch)]])
 
     return np.dot(rot_roll, np.dot(rot_yaw, rot_pitch))
+
+def project(xyz, K, RT):
+    print('RT       : ', RT)
+    print('RT[:,:3] : ', RT[:,:3])
+    print('RT[:,3:] : ', RT[:,3:])
+    xyz = np.dot(xyz, RT[:,:3].T) + RT[:, 3:].T
+    xyz = np.dot(xyz, K.T)
+    xy = xyz[:,:2] / xyz[:,2:]
+    return xy
 
 """ 
 ### USELESS PART

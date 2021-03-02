@@ -12,16 +12,26 @@ import argparse
 import cv2
 from matplotlib import pyplot as plt
 import matplotlib.patches as patches
+import get_sdf_data
+import glob
+from mesh_to_sdf import mesh_to_voxels
 
 def main():
     parser = argparse.ArgumentParser(description='OD3D_Reconstruction Process')
     parser.add_argument('--index', default=0, type=int,
                         help='the index of pix3d')
+    parser.add_argument('--check_mesh', default=0, type=int,
+                        help='True if you want to check individual model')
+    parser.add_argument('--model', default='bed',
+                        help='select the model when you set check_mesh as True')
+    parser.add_argument('--model_index', default=0, type=int,
+                        help='the index of the model if you set check_mesh as True')
 
     args = parser.parse_args()
 
     idx_p3d = int(args.index)
     print('idx_p3d:' , idx_p3d)
+    voxel_size = 0.2
 
     root = os.path.join(os.path.dirname(os.path.abspath(__file__)))
 
@@ -39,9 +49,20 @@ def main():
     rot_mat = json_data[idx_p3d]["rot_mat"]
     trans_mat = json_data[idx_p3d]["trans_mat"]
 
-    RT = np.hstack([np.array(rot_mat),np.array(trans_mat).reshape((-1,1))])
-    mesh = o3d.io.read_triangle_mesh('{}/{}/{}/{}/model.obj'.format(root, model[0], model[1], model[2]))
-    vertex_of_obj = np.asarray(mesh.vertices)
+    RT = np.hstack([np.array(rot_mat), np.array(trans_mat).reshape((-1,1))])
+
+    if args.check_mesh == 1:
+        print('load model...')
+        mesh = trimesh.load('{}/{}/{}/{}/model.obj'.format(root, model[0], model[1], model[2]))
+        print('loading is complete. convert to voxel...')
+        voxels = mesh_to_voxels(mesh, 64, pad=True)
+        print('Getting voxel is complete.')
+        verts, faces, norms, vals = measure.marching_cubes_lewiner(voxels, level=0)
+        verts = verts*voxel_size
+        vertex_of_obj = np.asarray(verts)
+    else :
+        mesh = o3d.io.read_triangle_mesh('{}/{}/{}/{}/model.obj'.format(root, model[0], model[1], model[2]))
+        vertex_of_obj = np.asarray(mesh.vertices)
 
     # why side by side mirror-shaped?
     # is this something rule of here?
@@ -55,13 +76,14 @@ def main():
     plt.show()
 
 def project(xyz, K, RT):
-    print('RT       : ', RT)
-    print('RT[:,:3] : ', RT[:,:3])
-    print('RT[:,3:] : ', RT[:,3:])
+    #print('RT       : ', RT)
+    #print('RT[:,:3] : ', RT[:,:3])
+    #print('RT[:,3:] : ', RT[:,3:])
     xyz = np.dot(xyz, RT[:,:3].T) + RT[:, 3:].T
     xyz = np.dot(xyz, K.T)
     xy = xyz[:,:2] / xyz[:,2:]
     return xy
 
 if __name__ == '__main__':
+    #get_sdf_data.get_mesh_from_obj('bed', 1)
     main()

@@ -17,7 +17,6 @@ def main():
     parser = argparse.ArgumentParser(description='OD3D_Reconstruction Process')
     parser.add_argument('--index', default=0, type=int,
                         help='the index of pix3d')
-
     parser.add_argument('--set_angles', default=0, type=float,
                         help='set the angles')
 
@@ -29,7 +28,7 @@ def main():
     root = os.path.join(os.path.dirname(os.path.abspath(__file__)))
 
     scale_factor = [0.5, 0.5]
-    room_scale = 1
+    room_scale = 0.8
     room_size = [256, 256, 256]
     #angles = [-20,185,-12]
     angles = [0,0,0]
@@ -96,12 +95,12 @@ def main():
     # make room
     room = np.ones([room_size[0],room_size[1],room_size[2]])
     # make floor, z-axis
-    #room[:,:,:wall_thickness] = np.zeros([room_size[0],room_size[1],wall_thickness])
+    room[:,:,room_size[2]-wall_thickness:room_size[2]] = np.zeros([room_size[0],room_size[1],wall_thickness])
     # make wall
     # x-axis
-    #room[:wall_thickness,:,:] = np.zeros([wall_thickness,room_size[1],room_size[2]])
+    room[room_size[0]-wall_thickness:room_size[0],:,:] = np.zeros([wall_thickness,room_size[1],room_size[2]])
     # y-axis
-    #room[:,:wall_thickness,:] = np.zeros([room_size[0],wall_thickness,room_size[2]])
+    room[:,:wall_thickness,:] = np.zeros([room_size[0],wall_thickness,room_size[2]])
     room.astype(float)
 
     # make objects
@@ -187,8 +186,9 @@ def main():
     # Align viewpoint
     # To align, 1. rotate -90 at y-axis
     #           2. rotate -90 at x-axis
-    #room = rotate_object(room, basic_angle=[[0,-90,0],[-90,0,0]])
-    #object1 = rotate_object(object1, basic_angle=[[0,90,0],[0,0,0]])#, rotation_mat=rotation_matrices[0])
+    # offset means similiar meaning of translation
+    room = rotate_object(room, rotation_mat=rotation_matrices[0], offset=[0.05, -0.8, 0.15])
+    object1 = rotate_object(object1, basic_angle=[[0,0,0],[0,0,0]], rotation_mat=rotation_matrices[0])
 
     objects.append(object1)
     #objects.append(object2)
@@ -206,17 +206,6 @@ def main():
     #check_ply('{}/pc.ply'.format(root))
     
     verts, faces, norms, _ = get_mesh(room, voxel_size)
-    """
-    K = np.array([[-570. ,0.    ,320.],
-                  [0.   ,570.  ,320.],
-                  [0.   ,0.    ,1.  ]]) """
-    
-    #RT = np.array([[1,0,0,0], [0,1,0,0], [0,0,1,1]])
-    #camera_image = project(vertex_of_obj, K, RT)
-    #camera_image = project(verts, K, RT)
-    # why side-by-side-mirror?
-    #plt.plot(camera_image[:,0], camera_image[:,1])
-    #plt.show()
     
     pcwrite('{}/pc.ply'.format(root), verts)
     meshwrite('{}/mesh.ply'.format(root), verts, faces, norms)
@@ -254,6 +243,10 @@ def meshwrite(filename, verts, faces, norms):
     ply_file.write("property float ny\n")
     ply_file.write("property float nz\n")
     ply_file.write("element face %d\n"%(faces.shape[0]))
+    def apply_camera(vis):
+        intrinsicVal=o3d.camera.PinholeCameraIntrinsic()
+        intrinsicVal.set_intrinsics(w, h, f, f, w/2.0-0.5, h/2.0-0.5)
+        
     ply_file.write("property list uchar int vertex_index\n")
     ply_file.write("end_header\n")
 
@@ -281,7 +274,21 @@ def check_mesh(filename):
 def check_mesh_and_ply(root):
     pcd = o3d.io.read_point_cloud('{}/pc.ply'.format(root))
     mesh = o3d.io.read_triangle_mesh('{}/mesh.ply'.format(root))
-    o3d.visualization.draw_geometries([pcd, mesh])
+
+    w=640
+    h=480
+    f=570.0
+
+    def capture_depth(vis):
+        depth=vis.capture_depth_float_buffer()
+        plt.imshow(np.asarray(depth))
+        plt.show()
+        return False
+
+    key_to_callback = {}
+    key_to_callback[ord(",")] = capture_depth
+
+    o3d.visualization.draw_geometries_with_key_callbacks([pcd, mesh], key_to_callback)
 
 def call_tsdf(filename):
     tsdf = np.load(filename)
